@@ -99,9 +99,10 @@ jobs:
         Remove-Item "temp_gbe" -Recurse -Force
 
     - name: Setup GCC (MinGW)
-      uses: egor-tensin/setup-mingw@v2
+      uses: msys2/setup-msys2@v2
       with:
-        platform: x64
+        msystem: MINGW64
+        install: mingw-w64-x86_64-gcc
 
     - name: Build C Library (MIDI Player)
       run: |
