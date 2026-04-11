@@ -99,7 +99,7 @@ jobs:
         Remove-Item "temp_gbe" -Recurse -Force
 
     - name: Setup GCC (MinGW)
-      uses: egor-tensin/setup-gcc@v1
+      uses: egor-tensin/setup-mingw@v2
       with:
         platform: x64
 
