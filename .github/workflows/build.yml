@@ -1,0 +1,91 @@
+name: Build SMD Tool (Auto-fetch Latest)
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
+      with:
+        enable-cache: true
+
+    - name: Install dependencies
+      run: |
+        uv sync
+
+    - name: Download & Extract Latest Tools (Auto-Fetch)
+      shell: pwsh
+      run: |
+        # --- 1. Xử lý Aria2 (Tải bản mới nhất của jericjan/aria2) ---
+        Write-Host "Fetching latest Aria2 release..."
+        $ariaApi = Invoke-RestMethod -Uri "https://api.github.com/repos/jericjan/aria2/releases/latest"
+        $ariaZipUrl = ($ariaApi.assets | Where-Object { $_.name -like "aria2*win-64bit*.zip" }).browser_download_url
+        Write-Host "Downloading Aria2 from: $ariaZipUrl"
+        Invoke-WebRequest -Uri $ariaZipUrl -OutFile "aria2_temp.zip"
+        
+        Write-Host "Extracting Aria2..."
+        Expand-Archive -Path "aria2_temp.zip" -DestinationPath "temp_aria2" -Force
+        
+        # Chỉ copy file aria2c.exe vào đúng vị trí
+        New-Item -ItemType Directory -Force -Path "third_party/aria2c"
+        # Tìm file aria2c.exe (vì thư mục giải nén có thể chứa số phiên bản)
+        $ariaExe = Get-ChildItem -Path "temp_aria2" -Filter "aria2c.exe" -Recurse | Select-Object -First 1
+        Copy-Item -Path $ariaExe.FullName -Destination "third_party/aria2c/aria2c.exe" -Force
+
+
+        # --- 2. Xử lý GBE Fork Tools (Tải bản mới nhất của Detanup01/gbe_fork_tools) ---
+        Write-Host "Fetching latest GBE Fork Tools release..."
+        $gbeApi = Invoke-RestMethod -Uri "https://api.github.com/repos/Detanup01/gbe_fork_tools/releases/latest"
+        $gbeZipUrl = ($gbeApi.assets | Where-Object { $_.name -like "*win*.zip" }).browser_download_url
+        Write-Host "Downloading GBE Fork Tools from: $gbeZipUrl"
+        Invoke-WebRequest -Uri $gbeZipUrl -OutFile "gbe_temp.zip"
+        
+        Write-Host "Extracting GBE Fork Tools..."
+        Expand-Archive -Path "gbe_temp.zip" -DestinationPath "temp_gbe" -Force
+        
+        # Chỉ copy nguyên thư mục generate_emu_config vào đúng vị trí
+        New-Item -ItemType Directory -Force -Path "third_party/gbe_fork_tools"
+        $gbeFolder = Get-ChildItem -Path "temp_gbe" -Filter "generate_emu_config" -Recurse -Directory | Select-Object -First 1
+        Copy-Item -Path $gbeFolder.FullName -Destination "third_party/gbe_fork_tools/" -Recurse -Force
+
+        # --- Dọn dẹp rác ---
+        Remove-Item "aria2_temp.zip" -Force
+        Remove-Item "gbe_temp.zip" -Force
+        Remove-Item "temp_aria2" -Recurse -Force
+        Remove-Item "temp_gbe" -Recurse -Force
+        Write-Host "Done setting up third_party tools!"
+
+    - name: Setup GCC (MinGW)
+      uses: egor-tensin/setup-gcc@v1
+      with:
+        platform: x64
+
+    - name: Build C Library (MIDI Player)
+      run: |
+        cd c
+        gcc midi_player_lib.c -shared -fPIC -o midi_player_lib.dll
+        cd ..
+
+    - name: Build EXE with PyInstaller
+      run: |
+        uv run pyinstaller main.spec
+
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: SMD-Release-Windows
+        path: dist/
