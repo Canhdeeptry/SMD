@@ -30,7 +30,7 @@ jobs:
     - name: Download & Extract Latest Tools (Auto-Fetch)
       shell: pwsh
       run: |
-        # --- 1. Xử lý Aria2 ---
+        # --- 1. Process Aria2 ---
         Write-Host "Fetching Aria2 releases..."
         $ariaReleases = Invoke-RestMethod -Uri "https://api.github.com/repos/jericjan/aria2/releases"
         $ariaLatest = $ariaReleases[0]
@@ -41,7 +41,7 @@ jobs:
             $ariaZipUrl = $ariaAsset.browser_download_url
             Write-Host "Found Windows version: $($ariaAsset.name)"
         } else {
-            Write-Error "Không tìm thấy bản cho Windows của Aria2!"
+            Write-Error "Windows version of Aria2 not found!"
             exit 1
         }
         
@@ -55,13 +55,13 @@ jobs:
         $ariaExe = Get-ChildItem -Path "temp_aria2" -Filter "aria2c.exe" -Recurse | Select-Object -First 1
         if ($null -ne $ariaExe) {
             Copy-Item -Path $ariaExe.FullName -Destination "third_party/aria2c/aria2c.exe" -Force
-            Write-Host "Copied aria2c.exe successfully."
+            Write-Host "Successfully copied aria2c.exe."
         } else {
-            Write-Error "LỖI: Không tìm thấy aria2c.exe!"
+            Write-Error "ERROR: aria2c.exe not found in the extracted archive!"
             exit 1
         }
 
-        # --- 2. Xử lý GBE Fork Tools ---
+        # --- 2. Process GBE Fork Tools ---
         Write-Host "Fetching GBE Fork Tools releases..."
         $gbeReleases = Invoke-RestMethod -Uri "https://api.github.com/repos/Detanup01/gbe_fork_tools/releases"
         $gbeLatest = $gbeReleases[0]
@@ -72,7 +72,7 @@ jobs:
             $gbeZipUrl = $gbeAsset.browser_download_url
             Write-Host "Found Windows version: $($gbeAsset.name)"
         } else {
-            Write-Error "Không tìm thấy bản cho Windows của GBE Fork Tools!"
+            Write-Error "Windows version of GBE Fork Tools not found!"
             exit 1
         }
         
@@ -86,19 +86,19 @@ jobs:
         $gbeFolder = Get-ChildItem -Path "temp_gbe" -Filter "generate_emu_config" -Recurse -Directory | Select-Object -First 1
         if ($null -ne $gbeFolder) {
             Copy-Item -Path $gbeFolder.FullName -Destination "third_party/gbe_fork_tools/" -Recurse -Force
-            Write-Host "Copied generate_emu_config successfully."
+            Write-Host "Successfully copied generate_emu_config."
         } else {
-            Write-Error "LỖI: Không tìm thấy thư mục generate_emu_config!"
+            Write-Error "ERROR: generate_emu_config directory not found!"
             exit 1
         }
 
-        # --- Dọn dẹp rác ---
+        # --- Cleanup ---
         Remove-Item "aria2_temp.zip" -Force
         Remove-Item "gbe_temp.zip" -Force
         Remove-Item "temp_aria2" -Recurse -Force
         Remove-Item "temp_gbe" -Recurse -Force
 
-    - name: Setup GCC (MinGW)
+    - name: Setup GCC (MSYS2)
       uses: msys2/setup-msys2@v2
       with:
         msystem: MINGW64
