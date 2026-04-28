@@ -1,122 +1,117 @@
-name: Build SMD Tool (Auto-Fetch)
+name: Auto-Build & Release SMD
 
 on:
+  schedule:
+    - cron: '0 0 * * SUN'
   workflow_dispatch:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  UPSTREAM_REPO: "jericjan/SMD"
+
+permissions:
+  contents: write
 
 jobs:
-  build:
+  check_and_build:
     runs-on: windows-latest
-
     steps:
     - name: Checkout code
-      uses: actions/checkout@v5
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Check for Upstream Updates
+      id: check_update
+      shell: pwsh
+      run: |
+        # Fetch the latest commit hash from the upstream repository
+        $upstream = Invoke-RestMethod -Uri "https://api.github.com/repos/${{ env.UPSTREAM_REPO }}/commits/main"
+        $latest_hash = $upstream.sha
+        
+        # Check against the hash of the last successful build
+        $last_hash = ""
+        if (Test-Path "last_build_hash.txt") { $last_hash = Get-Content "last_build_hash.txt" }
+
+        if ($latest_hash -eq $last_hash -and "${{ github.event_name }}" -ne "workflow_dispatch") {
+          Write-Host "No changes detected in upstream. Skipping build process."
+          echo "should_build=false" >> $env:GITHUB_OUTPUT
+        } else {
+          Write-Host "New updates found or manual trigger detected. Proceeding to build."
+          # Save the new hash for future comparisons
+          echo "$latest_hash" > last_build_hash.txt
+          echo "should_build=true" >> $env:GITHUB_OUTPUT
+        }
 
     - name: Set up Python
-      uses: actions/setup-python@v6
+      if: steps.check_update.outputs.should_build == 'true'
+      uses: actions/setup-python@v5
       with:
         python-version: '3.10'
 
     - name: Install uv
-      uses: astral-sh/setup-uv@v8
-      with:
-        enable-cache: true
+      if: steps.check_update.outputs.should_build == 'true'
+      uses: astral-sh/setup-uv@v5 
 
     - name: Install dependencies
-      run: |
-        uv sync
+      if: steps.check_update.outputs.should_build == 'true'
+      run: uv sync
 
-    - name: Download & Extract Latest Tools (Auto-Fetch)
+    - name: Download & Extract Latest Tools
+      if: steps.check_update.outputs.should_build == 'true'
       shell: pwsh
       run: |
-        # --- 1. Process Aria2 ---
-        Write-Host "Fetching Aria2 releases..."
-        $ariaReleases = Invoke-RestMethod -Uri "https://api.github.com/repos/jericjan/aria2/releases"
-        $ariaLatest = $ariaReleases[0]
-        
-        $ariaAsset = $ariaLatest.assets | Where-Object { $_.name -like "*windows.zip" } | Select-Object -First 1
-        
-        if ($null -ne $ariaAsset) {
-            $ariaZipUrl = $ariaAsset.browser_download_url
-            Write-Host "Found Windows version: $($ariaAsset.name)"
-        } else {
-            Write-Error "Windows version of Aria2 not found!"
-            exit 1
-        }
-        
-        Write-Host "Downloading Aria2 from: $ariaZipUrl"
-        Invoke-WebRequest -Uri $ariaZipUrl -OutFile "aria2_temp.zip"
-        
-        Write-Host "Extracting Aria2..."
-        Expand-Archive -Path "aria2_temp.zip" -DestinationPath "temp_aria2" -Force
-        
+        # --- Process Aria2 ---
+        $ariaApi = Invoke-RestMethod -Uri "https://api.github.com/repos/jericjan/aria2/releases"
+        $ariaAsset = $ariaApi[0].assets | Where-Object { $_.name -like "*windows.zip" } | Select-Object -First 1
+        Invoke-WebRequest -Uri $ariaAsset.browser_download_url -OutFile "aria2.zip"
+        Expand-Archive -Path "aria2.zip" -DestinationPath "temp_aria2" -Force
         New-Item -ItemType Directory -Force -Path "third_party/aria2c"
-        $ariaExe = Get-ChildItem -Path "temp_aria2" -Filter "aria2c.exe" -Recurse | Select-Object -First 1
-        if ($null -ne $ariaExe) {
-            Copy-Item -Path $ariaExe.FullName -Destination "third_party/aria2c/aria2c.exe" -Force
-            Write-Host "Successfully copied aria2c.exe."
-        } else {
-            Write-Error "ERROR: aria2c.exe not found in the extracted archive!"
-            exit 1
-        }
+        Copy-Item -Path (Get-ChildItem -Path "temp_aria2" -Filter "aria2c.exe" -Recurse).FullName -Destination "third_party/aria2c/aria2c.exe"
 
-        # --- 2. Process GBE Fork Tools ---
-        Write-Host "Fetching GBE Fork Tools releases..."
-        $gbeReleases = Invoke-RestMethod -Uri "https://api.github.com/repos/Detanup01/gbe_fork_tools/releases"
-        $gbeLatest = $gbeReleases[0]
-        
-        $gbeAsset = $gbeLatest.assets | Where-Object { $_.name -match "win" -and $_.name -like "*.zip" } | Select-Object -First 1
-        
-        if ($null -ne $gbeAsset) {
-            $gbeZipUrl = $gbeAsset.browser_download_url
-            Write-Host "Found Windows version: $($gbeAsset.name)"
-        } else {
-            Write-Error "Windows version of GBE Fork Tools not found!"
-            exit 1
-        }
-        
-        Write-Host "Downloading GBE Fork Tools from: $gbeZipUrl"
-        Invoke-WebRequest -Uri $gbeZipUrl -OutFile "gbe_temp.zip"
-        
-        Write-Host "Extracting GBE Fork Tools..."
-        Expand-Archive -Path "gbe_temp.zip" -DestinationPath "temp_gbe" -Force
-        
+        # --- Process GBE Fork Tools ---
+        $gbeApi = Invoke-RestMethod -Uri "https://api.github.com/repos/Detanup01/gbe_fork_tools/releases"
+        $gbeAsset = $gbeApi[0].assets | Where-Object { $_.name -match "win" -and $_.name -like "*.zip" } | Select-Object -First 1
+        Invoke-WebRequest -Uri $gbeAsset.browser_download_url -OutFile "gbe.zip"
+        Expand-Archive -Path "gbe.zip" -DestinationPath "temp_gbe" -Force
         New-Item -ItemType Directory -Force -Path "third_party/gbe_fork_tools"
-        $gbeFolder = Get-ChildItem -Path "temp_gbe" -Filter "generate_emu_config" -Recurse -Directory | Select-Object -First 1
-        if ($null -ne $gbeFolder) {
-            Copy-Item -Path $gbeFolder.FullName -Destination "third_party/gbe_fork_tools/" -Recurse -Force
-            Write-Host "Successfully copied generate_emu_config."
-        } else {
-            Write-Error "ERROR: generate_emu_config directory not found!"
-            exit 1
-        }
-
-        # --- Cleanup ---
-        Remove-Item "aria2_temp.zip" -Force
-        Remove-Item "gbe_temp.zip" -Force
-        Remove-Item "temp_aria2" -Recurse -Force
-        Remove-Item "temp_gbe" -Recurse -Force
+        $gbeFolder = Get-ChildItem -Path "temp_gbe" -Filter "generate_emu_config" -Recurse -Directory
+        Copy-Item -Path $gbeFolder.FullName -Destination "third_party/gbe_fork_tools/" -Recurse -Force
 
     - name: Setup GCC (MSYS2)
+      if: steps.check_update.outputs.should_build == 'true'
       uses: msys2/setup-msys2@v2
       with:
         msystem: MINGW64
         install: mingw-w64-x86_64-gcc
 
-    - name: Build C Library (MIDI Player)
+    - name: Build C Library
+      if: steps.check_update.outputs.should_build == 'true'
       run: |
         cd c
         gcc midi_player_lib.c -shared -fPIC -o midi_player_lib.dll
         cd ..
 
     - name: Build EXE with PyInstaller
-      run: |
-        uv run pyinstaller main.spec
+      if: steps.check_update.outputs.should_build == 'true'
+      run: uv run pyinstaller main.spec
 
-    - name: Upload Artifact
-      uses: actions/upload-artifact@v5
+    - name: Package Release
+      if: steps.check_update.outputs.should_build == 'true'
+      shell: pwsh
+      run: |
+        # Clean up existing zip files in dist to avoid duplication
+        Remove-Item -Path "dist/*.zip" -Force -ErrorAction SilentlyContinue
+        # Archive the build output from dist/main
+        Compress-Archive -Path "dist/main/*" -DestinationPath "SMD_Windows_Build.zip"
+
+    - name: Create GitHub Release
+      if: steps.check_update.outputs.should_build == 'true'
+      uses: softprops/action-gh-release@v2
       with:
-        name: SMD-Release-Windows
-        path: dist/
+        tag_name: build-${{ github.run_number }}
+        name: "Auto-Build: $(Get-Date -Format 'yyyy-MM-dd')"
+        body: "Automated build from latest upstream changes. Run Number: ${{ github.run_number }}"
+        files: SMD_Windows_Build.zip
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
