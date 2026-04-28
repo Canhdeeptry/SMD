@@ -71,7 +71,7 @@ jobs:
 
     - name: Install uv
       if: steps.check_update.outputs.should_build == 'true'
-      uses: astral-sh/setup-uv@v8
+      uses: astral-sh/setup-uv@v7
 
     - name: Install dependencies
       if: steps.check_update.outputs.should_build == 'true'
