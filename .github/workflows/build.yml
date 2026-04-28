@@ -2,7 +2,7 @@ name: Auto-Build & Release SMD
 
 on:
   schedule:
-    - cron: '0 0 * * SUN'
+    - cron: '0 0 * * SUN' 
   workflow_dispatch:
 
 env:
@@ -25,23 +25,39 @@ jobs:
       id: check_update
       shell: pwsh
       run: |
-        # Fetch the latest commit hash from the upstream repository
         $upstream = Invoke-RestMethod -Uri "https://api.github.com/repos/${{ env.UPSTREAM_REPO }}/commits/main"
         $latest_hash = $upstream.sha
-        
-        # Check against the hash of the last successful build
         $last_hash = ""
         if (Test-Path "last_build_hash.txt") { $last_hash = Get-Content "last_build_hash.txt" }
 
         if ($latest_hash -eq $last_hash -and "${{ github.event_name }}" -ne "workflow_dispatch") {
-          Write-Host "No changes detected in upstream. Skipping build process."
+          Write-Host "No changes in upstream. Skipping."
           echo "should_build=false" >> $env:GITHUB_OUTPUT
         } else {
-          Write-Host "New updates found or manual trigger detected. Proceeding to build."
-          # Save the new hash for future comparisons
+          Write-Host "Proceeding to build."
           echo "$latest_hash" > last_build_hash.txt
           echo "should_build=true" >> $env:GITHUB_OUTPUT
         }
+
+    - name: Prepare Metadata
+      if: steps.check_update.outputs.should_build == 'true'
+      id: meta
+      shell: pwsh
+      run: |
+        # Get current date
+        $date = Get-Date -Format "yyyy-MM-dd"
+        echo "BUILD_DATE=$date" >> $env:GITHUB_ENV
+        
+        # Extract version from main.py (looking for VERSION = "x.x.x")
+        $version = "unknown"
+        if (Test-Path "main.py") {
+            $content = Get-Content "main.py" -Raw
+            if ($content -match 'VERSION\s*=\s*["'']([^"'']+)["'']') {
+                $version = $Matches[1]
+            }
+        }
+        echo "APP_VERSION=$version" >> $env:GITHUB_ENV
+        Write-Host "Detected Version: $version"
 
     - name: Set up Python
       if: steps.check_update.outputs.should_build == 'true'
@@ -51,7 +67,7 @@ jobs:
 
     - name: Install uv
       if: steps.check_update.outputs.should_build == 'true'
-      uses: astral-sh/setup-uv@v5 
+      uses: astral-sh/setup-uv@v5
 
     - name: Install dependencies
       if: steps.check_update.outputs.should_build == 'true'
@@ -61,7 +77,7 @@ jobs:
       if: steps.check_update.outputs.should_build == 'true'
       shell: pwsh
       run: |
-        # --- Process Aria2 ---
+        # Aria2
         $ariaApi = Invoke-RestMethod -Uri "https://api.github.com/repos/jericjan/aria2/releases"
         $ariaAsset = $ariaApi[0].assets | Where-Object { $_.name -like "*windows.zip" } | Select-Object -First 1
         Invoke-WebRequest -Uri $ariaAsset.browser_download_url -OutFile "aria2.zip"
@@ -69,7 +85,7 @@ jobs:
         New-Item -ItemType Directory -Force -Path "third_party/aria2c"
         Copy-Item -Path (Get-ChildItem -Path "temp_aria2" -Filter "aria2c.exe" -Recurse).FullName -Destination "third_party/aria2c/aria2c.exe"
 
-        # --- Process GBE Fork Tools ---
+        # GBE Fork Tools
         $gbeApi = Invoke-RestMethod -Uri "https://api.github.com/repos/Detanup01/gbe_fork_tools/releases"
         $gbeAsset = $gbeApi[0].assets | Where-Object { $_.name -match "win" -and $_.name -like "*.zip" } | Select-Object -First 1
         Invoke-WebRequest -Uri $gbeAsset.browser_download_url -OutFile "gbe.zip"
@@ -100,18 +116,19 @@ jobs:
       if: steps.check_update.outputs.should_build == 'true'
       shell: pwsh
       run: |
-        # Clean up existing zip files in dist to avoid duplication
         Remove-Item -Path "dist/*.zip" -Force -ErrorAction SilentlyContinue
-        # Archive the build output from dist/main
-        Compress-Archive -Path "dist/main/*" -DestinationPath "SMD_Windows_Build.zip"
+        # Create a zip with the version in the filename
+        $zipName = "SMD_Windows_v${{ env.APP_VERSION }}.zip"
+        Compress-Archive -Path "dist/main/*" -DestinationPath "$zipName"
+        echo "ZIP_FILENAME=$zipName" >> $env:GITHUB_ENV
 
     - name: Create GitHub Release
       if: steps.check_update.outputs.should_build == 'true'
       uses: softprops/action-gh-release@v2
       with:
-        tag_name: build-${{ github.run_number }}
-        name: "Auto-Build: $(Get-Date -Format 'yyyy-MM-dd')"
-        body: "Automated build from latest upstream changes. Run Number: ${{ github.run_number }}"
-        files: SMD_Windows_Build.zip
+        tag_name: "v${{ env.APP_VERSION }}-${{ github.run_number }}"
+        name: "Auto-Build: ${{ env.BUILD_DATE }} (v${{ env.APP_VERSION }})"
+        body: "Automated build from latest upstream changes. Version: ${{ env.APP_VERSION }}"
+        files: ${{ env.ZIP_FILENAME }}
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
