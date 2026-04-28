@@ -61,7 +61,7 @@ class SLSManager(AppInjectionManager):
         """Parse SLS config file"""
         parser = YAMLParser(self.sls_config_path)
         data = parser.read()
-        apps = data.get("AdditionalApps", [])
+        apps: list[int] = YAMLParser.ensure_list("AdditionalApps", data)
         return parser, data, apps
 
     def add_ids(
@@ -69,7 +69,7 @@ class SLSManager(AppInjectionManager):
     ):
         parser = YAMLParser(self.sls_config_path)
         yaml_data = parser.read()
-        app_ids = yaml_data.get("AdditionalApps", [])
+        app_ids: list[int] = YAMLParser.ensure_list("AdditionalApps", yaml_data)
         changes = 0
         if isinstance(data, int):
             data = [data]
