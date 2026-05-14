@@ -123,3 +123,14 @@ jobs:
         files: ${{ env.ZIP_FILENAME }}
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - name: Save Build Hash
+      if: steps.check_update.outputs.should_build == 'true'
+      shell: pwsh
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git add last_build_hash.txt
+        git commit -m "chore: update last build hash [skip ci]"
+        git push
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
