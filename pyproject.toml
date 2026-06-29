@@ -3,14 +3,13 @@ name = "steam-manifest-decrypt"
 version = "4.4.0"
 description = "Decrypt steam manifest files"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.12"
 dependencies = [
     "black>=25.9.0",
     "colorama>=0.4.6",
     "configupdater>=3.2",
     "flake8>=7.3.0",
     "flake8-bugbear>=24.12.12",
-    "grpcio-tools>=1.48.2",
     "httpx>=0.28.1",
     "inquirerpy>=0.3.4",
     "isort>=6.1.0",

@@ -65,7 +65,7 @@ def main(ui: UI, args: argparse.Namespace) -> MainReturnCode:
             MainMenu.UPDATE_ALL_MANIFESTS,
             MainMenu.INSTALL_MENU,
             MainMenu.DL_USER_GAME_STATS,
-            MainMenu.OFFLINE_FIX
+            MainMenu.OFFLINE_FIX,
         ] + default_blacklist
     else:
         exclude = []
@@ -130,9 +130,8 @@ if __name__ == "__main__":
     logger.debug(f"exe is {sys.executable}")
     start_time = time.time()
     parser = argparse.ArgumentParser(
-                        prog='SMD',
-                        description='Steam Manifest Decryptor',
-                        epilog='bottom text')
+        prog="SMD", description="Steam Manifest Decryptor", epilog="bottom text"
+    )
     parser.add_argument(
         "-f", "--file", help="A .lua file or ZIP file you want to process"
     )
