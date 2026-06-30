@@ -55,14 +55,8 @@ def decrypt_filename(b64_encrypted_name: str, key_bytes: bytes) -> str:
         return b64_encrypted_name
 
 
-def view_manifest(manifest_file: bytes):
-    """Decrypts a manifest file, given a decryption key
-
-    Args:
-        encrypted_file (io.BytesIO): The encrypted manifest file
-        output_filepath (Path): Where you want the decrypted file to go
-        dec_key (str): The decryption key as a hex string
-    """
+def view_manifest(manifest_file: bytes, show_chunk_data: bool = False):
+    """View contents of a manifest file. Does not decrypt"""
 
     stream = io.BytesIO(manifest_file)
 
@@ -95,13 +89,14 @@ def view_manifest(manifest_file: bytes):
               f"SHA content: {mapping.sha_content.hex()}\n"
               f"Chunk count: {len(mapping.chunks)}\n"
               "---\n")
-        for nth, chunk in enumerate(mapping.chunks):
-            print(f"Chunk #{nth+1}")
-            print(f"SHA: {chunk.sha.hex()}\n"
-                  f"CRC: {hex(chunk.crc)[2:]}\n"
-                  f"Offset: {chunk.offset}\n"
-                  f"CB Original: {chunk.cb_original}\n"
-                  f"CB Compressed: {chunk.cb_compressed}")
+        if show_chunk_data:
+            for nth, chunk in enumerate(mapping.chunks):
+                print(f"Chunk #{nth+1}")
+                print(f"SHA: {chunk.sha.hex()}\n"
+                    f"CRC: {hex(chunk.crc)[2:]}\n"
+                    f"Offset: {chunk.offset}\n"
+                    f"CB Original: {chunk.cb_original}\n"
+                    f"CB Compressed: {chunk.cb_compressed}")
     # Update and re-serialize the metadata
     metadata = ContentManifestMetadata()
     metadata.ParseFromString(metadata_bytes)
