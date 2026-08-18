@@ -1,11 +1,13 @@
 import logging
-from typing import Any, Union, cast
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any, cast
 
 import msgpack  # type: ignore
 
 from smd.prompts import prompt_secret
 from smd.secret_store import keyring_decrypt, keyring_encrypt
-from smd.structs import Settings
+from smd.ui.settings.types import Settings
 from smd.utils import root_folder
 
 logger = logging.getLogger(__name__)
@@ -24,6 +26,25 @@ def load_all_settings() -> dict[Any, Any]:
     return settings
 
 
+def get_or_default_setting[T: str | bool](setting: Settings, default: T) -> T:
+    """Returns the setting if it exists, otherwise saves and returns the default."""
+    if (val := get_setting(setting)) is not None:
+        return cast(T, val)
+    set_setting(setting, default)
+    return default
+
+
+def get_or_compute_setting(setting: Settings, callable: Callable[[], str | bool | Path]):
+    """Returns the setting if it exists, otherwise runs callable to get it, saves it, and returns it."""
+    if (val := get_setting(setting)) is not None:
+        return val
+    val = callable()
+    if isinstance(val, Path):
+        val = str(val.resolve())
+    set_setting(setting, val)
+    return val  
+
+
 def get_setting(key: Settings):
     # TODO: don't trigger I/O when last used command was also get_setting
     logger.debug(f"get_setting: {key.clean_name}")
@@ -31,13 +52,13 @@ def get_setting(key: Settings):
     return keyring_decrypt(value) if (value and key.hidden) else value
 
 
-def set_setting(key: Settings, value: Union[str, bool]):
+def set_setting(key: Settings, value: str | bool):
     if not isinstance(value, str) and not isinstance(
         value, bool
     ):  # pyright: ignore[reportUnnecessaryIsInstance]
-        raise ValueError("Invalid type used for set_setting")
+        raise TypeError("Invalid type used for set_setting")
 
-    logger.debug(f"set_setting: {key.clean_name} -> {str(value)}")
+    logger.debug(f"set_setting: {key.clean_name} -> {value!s}")
     settings = load_all_settings()
     settings[key.key_name] = (
         keyring_encrypt(value) if key.hidden and isinstance(value, str) else value

@@ -1,7 +1,7 @@
-from functools import partial
 import subprocess
 import threading
 import time
+from functools import partial
 from pathlib import Path
 
 import psutil
@@ -29,12 +29,12 @@ class SteamProcess:
 
     def kill(self):
         exe = self.steam_path / self.exe_name
-        subprocess.run([str(exe), "-shutdown"])
+        subprocess.run([str(exe), "-shutdown"], check=True)
 
     def resolve_injector_path(self):
         candidates = ["DLLInjector.exe", "steam.exe"]
         matches = [
-            x for x in map(lambda x: (self.injector_dir / x), candidates) if x.exists()
+            x for x in ((self.injector_dir / name) for name in candidates) if x.exists()
         ]
         if len(matches) == 1:
             return str(matches[0].resolve())

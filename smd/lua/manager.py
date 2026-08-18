@@ -2,7 +2,7 @@ import logging
 import re
 import shutil
 from pathlib import Path
-from typing import Optional
+from typing import cast
 
 from colorama import Fore, Style
 
@@ -22,17 +22,15 @@ logger = logging.getLogger(__name__)
 
 
 class LuaManager:
-    def __init__(
-        self, os_type: OSType
-    ):
+    def __init__(self, os_type: OSType):
         """Might need refactor. Does I/O on init"""
         self.saved_lua = Path().cwd() / "saved_lua"
         self.named_ids = get_named_ids(self.saved_lua)
         self.os_type = os_type
 
     def get_raw_lua(
-        self, choice: LuaChoice, override: Optional[Path] = None
-    ) -> Optional[RawLua]:
+        self, choice: LuaChoice, override: Path | None = None
+    ) -> RawLua | None:
         """Return the lua path and contents"""
         while True:
             if choice == LuaChoice.SELECT_SAVED_LUA:
@@ -64,11 +62,15 @@ class LuaManager:
                 break
         return RawLua(lua_path, lua_contents)
 
+    def fetch_lua_strict(self) -> LuaParsedInfo:
+        return cast(LuaParsedInfo, self.fetch_lua(strict=True))
+
     def fetch_lua(
         self,
-        override_choice: Optional[LuaChoice] = None,
-        override_path: Optional[Path] = None,
-    ) -> Optional[LuaParsedInfo]:
+        override_choice: LuaChoice | None = None,
+        override_path: Path | None = None,
+        strict: bool = False,
+    ) -> LuaParsedInfo | None:
         """Depending on the choice, fetch a lua file then parse the contents"""
         depot_no_key_regex = re.compile(
             r"^\s*addappid\s*\(\s*(\d+)\s*\)", flags=re.MULTILINE
@@ -84,10 +86,12 @@ class LuaManager:
 
         while True:
             ids_with_no_key: list[str] = []
-            choice: Optional[LuaChoice] = (
+            choice: LuaChoice | None = (
                 override_choice
                 if override_choice
-                else prompt_select("Choose:", list(LuaChoice), cancellable=True)
+                else prompt_select(
+                    "Choose:", list(LuaChoice), cancellable=not strict
+                )
             )
             if choice is None:
                 return None
@@ -122,4 +126,3 @@ class LuaManager:
                 shutil.copyfile(lua.path, target)
             except shutil.SameFileError:
                 logger.debug("Skipped backup because it's the same file")
-                pass

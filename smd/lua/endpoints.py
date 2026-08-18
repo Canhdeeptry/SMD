@@ -6,7 +6,6 @@ import json
 import logging
 import re
 from pathlib import Path
-from typing import Optional
 from urllib.parse import urljoin
 
 from colorama import Fore, Style
@@ -96,12 +95,12 @@ def get_oureverday(dest: Path, app_id: str):
 
     all_dlc_info = provider.expand_dlc(info)
     # In case API doesnt return one of the IDs (i.e. ID is not a depot)
-    depot_ids.extend([str(x) for x in all_dlc_info.keys()])
+    depot_ids.extend([str(x) for x in all_dlc_info])
     dlc_depots: list[str] = []
     for dlc_data in all_dlc_info.values():
         depots = dlc_data.get("depots", {})
         if depots:
-            dlc_depots.extend([x for x in depots.keys() if x.isnumeric()])
+            dlc_depots.extend([x for x in depots if x.isnumeric()])
     depot_ids.extend(dlc_depots)
     depot_ids = list(dict.fromkeys(depot_ids))
     key_matches = {x: json_data.get(x) for x in depot_ids}
@@ -110,7 +109,7 @@ def get_oureverday(dest: Path, app_id: str):
         if dec_key is None:
             lua_contents += f"addappid({depot_id})\n"
             continue
-        lua_contents += f"addappid({depot_id}, 1, \"{dec_key}\")\n"
+        lua_contents += f'addappid({depot_id}, 1, "{dec_key}")\n'
 
     lua_path = dest / f"{app_id}.lua"
     if lua_contents:
@@ -119,7 +118,7 @@ def get_oureverday(dest: Path, app_id: str):
         return lua_path
 
 
-def get_morrenus(dest: Path, app_id: str) -> Optional[Path]:
+def get_morrenus(dest: Path, app_id: str) -> Path | None:
     url = urljoin(MORRENUS_BASE_URL, f"/api/v1/manifest/{app_id}")
 
     morrenus_key = resolve_morrenus_key()
@@ -146,18 +145,20 @@ def get_morrenus(dest: Path, app_id: str) -> Optional[Path]:
 
     if not state:
         print(
-            Fore.RED
-            + f"Daily limit exceeded! You used {usage if usage else '??'}/"
-            f"{limit if limit else '??'}"
-            + Style.RESET_ALL
+            Fore.RED + f"Daily limit exceeded! You used {usage if usage else '??'}/"
+            f"{limit if limit else '??'}" + Style.RESET_ALL
         )
     else:
-        if usage is None or limit is None:
-            if not prompt_confirm("Could not get usage limits. "
-                                  "Would you like to continue regardless?"):
-                return
+        if (
+            usage is None
+            or limit is None
+            and not prompt_confirm(
+                "Could not get usage limits. " "Would you like to continue regardless?"
+            )
+        ):
+            return
         logger.debug(f"Downloading lua files from {url}")
-        lua_bytes = b''
+        lua_bytes = b""
         while True:
             with download_to_tempfile(url, headers) as tf:
                 if tf is None:
@@ -167,11 +168,9 @@ def get_morrenus(dest: Path, app_id: str) -> Optional[Path]:
 
                 data = tf.read()
                 print(
-                    Fore.GREEN
-                    + "Morrenus Daily Limit: "
+                    Fore.GREEN + "Morrenus Daily Limit: "
                     f"{usage+1 if usage is not None else '??'}/"
-                    f"{limit if limit is not None else '??'}"
-                    + Style.RESET_ALL
+                    f"{limit if limit is not None else '??'}" + Style.RESET_ALL
                 )
                 lua_bytes = read_lua_from_zip(io.BytesIO(data), decode=False)
                 if lua_bytes is None:

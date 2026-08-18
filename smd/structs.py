@@ -1,10 +1,9 @@
 """Aliases, Enums, NamedTuples, etc go here"""
 
-import sys
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from pathlib import Path
-from typing import Any, Literal, NamedTuple, NewType, Optional, Union
+from typing import Any, NamedTuple, NewType
 
 
 class LuaChoice(Enum):
@@ -19,44 +18,6 @@ class LuaChoiceReturnCode(Enum):
     LOOP = auto()
     "Doesn't actually get read, but basically retry if chosen lua method fails"
 
-
-class MainMenu(Enum):
-    MANAGE_LUA = "Process a .lua file"
-    UPDATE_ALL_MANIFESTS = "Update manifests for all outdated games"
-    DL_MANIFEST_ONLY = "Download manifests ONLY from a .lua file"
-    DL_WORKSHOP_ITEM = "Download workshop item manifest"
-    DLC_CHECK = "Check DLC status of a game"
-    CRACK_GAME = "Crack a game (gbe_fork)"
-    REMOVE_DRM = "Remove SteamStub DRM (Steamless)"
-    DL_USER_GAME_STATS = "Download UserGameStatsSchema (achievements w/o gbe_fork)"
-    OFFLINE_FIX = "Offline Mode Fix"
-    if sys.platform == "win32":
-        MANAGE_APPLIST = "Manage AppList IDs"
-    elif sys.platform == "linux":
-        MANAGE_APPLIST = "Manage SLSSteam IDs"
-    else:
-        MANAGE_APPLIST = "Manage injected IDs"
-    CHECK_UPDATES = "Check for updates"
-    INSTALL_MENU = "Install/Uninstall Context Menu"
-    SETTINGS = "Settings"
-    EXIT = "Exit"
-
-
-GameSpecificChoices = Literal[
-    MainMenu.CRACK_GAME,
-    MainMenu.REMOVE_DRM,
-    MainMenu.DL_USER_GAME_STATS,
-    MainMenu.DLC_CHECK,
-    MainMenu.DL_WORKSHOP_ITEM
-]
-
-GAME_SPECIFIC_CHOICES = (
-    MainMenu.CRACK_GAME,
-    MainMenu.REMOVE_DRM,
-    MainMenu.DL_USER_GAME_STATS,
-    MainMenu.DLC_CHECK,
-    MainMenu.DL_WORKSHOP_ITEM
-)
 
 
 class AppListChoice(Enum):
@@ -75,88 +36,7 @@ class MainReturnCode(Enum):
     EXIT = auto()
 
 
-class GreenLumaVersions(Enum):
-    """These are the keynames in HKCU\\SOFTWARE\\"""
 
-    GLR = "GLR"
-    GL2020 = "GL2020"
-    GL2024 = "GL2024"
-    GL2025 = "GL2025"
-
-    def __str__(self):
-        return self.value
-
-
-class SettingCustomTypes(Enum):
-    DIR = auto()
-    FILE = auto()
-
-
-SettingType = Union[type, list[Enum], SettingCustomTypes]
-
-
-class SettingItem(NamedTuple):
-    key_name: str
-    "The key name of the setting (used in the savefile)"
-    clean_name: str
-    "The name of the setting as displayed in the Settings menu"
-    hidden: bool
-    "Whether the item is hidden (e.g. sensitive info)"
-    type: SettingType
-    "Type of the setting"
-
-
-# Note: values are only obtained through get_setting() in utils.py
-class Settings(Enum):
-    ADVANCED_MODE = SettingItem("advanced_mode", "Advanced Mode", False, bool)
-    MORRENUS_KEY = SettingItem("morrenus_key", "Morrenus API Key", True, str)
-    STEAM_PATH = SettingItem(
-        "steam_path", "Steam Installation Path", False, SettingCustomTypes.DIR
-    )
-    STEAM_USER = SettingItem("steam_user", "Steam Username", False, str)
-    STEAM_PASS = SettingItem("steam_pass", "Steam Password", True, str)
-    STEAM32_ID = SettingItem("steam32_id", "Steam32 ID", False, str)
-    GL_VERSION = SettingItem(
-        "greenluma_version", "GreenLuma Version", False, list(GreenLumaVersions)
-    )
-    APPLIST_FOLDER = SettingItem(
-        "applist_folder", "GreenLuma AppList Folder", False, SettingCustomTypes.DIR
-    )
-    SLS_CONFIG_LOCATION = SettingItem(
-        "sls_config_loc",
-        "SLSSteam Config File Location",
-        False,
-        SettingCustomTypes.FILE,
-    )
-    TRACK_GREENLUMA_ACH = SettingItem(
-        "gl_track_ach", "Track Achievements via Greenluma", False, bool
-    )
-    STEAM_WEB_API_KEY = SettingItem("steam_web_api_key", "Steam Web API Key", True, str)
-    PLAY_MUSIC = SettingItem("play_music", "Play Music", False, bool)
-
-    @property
-    def key_name(self) -> str:
-        "The key name of the setting (used in the savefile)"
-        return self.value.key_name
-
-    @property
-    def clean_name(self) -> str:
-        "The name of the setting as displayed in the Settings menu"
-        return self.value.clean_name
-
-    @property
-    def hidden(self) -> bool:
-        "Whether the item is hidden (e.g. sensitive info)"
-        return self.value.hidden
-
-    @property
-    def type(self) -> SettingType:
-        return self.value.type
-
-
-class SettingOperations(Enum):
-    EDIT = "Edit"
-    DELETE = "Delete"
 
 
 class LoggedInUser(NamedTuple):
@@ -169,11 +49,11 @@ class LoggedInUser(NamedTuple):
 
 
 class LuaResult(NamedTuple):
-    path: Optional[Path]
+    path: Path | None
     "The lua file's path if it exists"
-    contents: Optional[str]
+    contents: str | None
     "The string contents of the lua file"
-    switch_choice: Union["LuaChoice", "LuaChoiceReturnCode"]
+    switch_choice: LuaChoice | LuaChoiceReturnCode
     "A LuaChoice to switch to."
 
 
@@ -188,7 +68,7 @@ class DepotOrAppID(NamedTuple):
     "Name of the app"
     id: int
     "The App/Depot ID"
-    parent_id: Optional[int]
+    parent_id: int | None
     "The parent App ID (if it's a depot)"
 
 

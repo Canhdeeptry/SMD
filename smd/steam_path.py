@@ -2,35 +2,36 @@ import logging
 import shutil
 import sys
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, Optional
 
 from colorama import Fore, Style
 
 from smd.prompts import prompt_dir
 from smd.storage.settings import get_setting, set_setting
-from smd.structs import OSType, Settings
+from smd.structs import OSType
+from smd.ui.settings.types import Settings
 
 if sys.platform == "win32":
     from smd.registry_access import find_steam_path_from_registry
 else:
-    find_steam_path_from_registry = lambda: None  # noqa: E731
+    find_steam_path_from_registry = lambda: None
 
 logger = logging.getLogger(__name__)
 
 
-def validate_steam_path(path: Optional[Path]) -> bool:
+def validate_steam_path(path: Path | None) -> bool:
     return path is not None and (path / "steamapps").exists()
 
 
 class PathFinderStrategy(ABC):
     @abstractmethod
-    def find(self) -> Optional[Path]:
+    def find(self) -> Path | None:
         pass
 
 
 class RegistryFinder(PathFinderStrategy):
-    def find(self) -> Optional[Path]:
+    def find(self) -> Path | None:
         path = find_steam_path_from_registry()
 
         if validate_steam_path(path):
@@ -39,14 +40,14 @@ class RegistryFinder(PathFinderStrategy):
 
 
 class LinuxFinder(PathFinderStrategy):
-    def find(self) -> Optional[Path]:
+    def find(self) -> Path | None:
         steam_dir = (Path.home() / ".steam/root").resolve()
         if steam_dir.exists():
             return steam_dir
 
 
 class EnvFinder(PathFinderStrategy):
-    def find(self) -> Optional[Path]:
+    def find(self) -> Path | None:
         steam_dir_str = shutil.which("steam")
         if steam_dir_str:
             steam_dir = Path(steam_dir_str).parent.resolve()
@@ -63,16 +64,16 @@ class UserInputFinder(PathFinderStrategy):
         return prompt_dir(
             msg="Paste the path here (The folder that has steam.exe)",
             custom_check=self.validator,
-            custom_msg="Make sure the folder has steam.exe in it"
+            custom_msg="Make sure the folder has steam.exe in it",
         )
 
 
 class SettingsFinder(PathFinderStrategy):
     def __init__(self):
-        self.raw_path: Optional[str] = None
+        self.raw_path: str | None = None
         "populated after find() is ran"
 
-    def find(self) -> Optional[Path]:
+    def find(self) -> Path | None:
         self.raw_path = get_setting(Settings.STEAM_PATH)
         if self.raw_path is not None:
             path = Path(self.raw_path)

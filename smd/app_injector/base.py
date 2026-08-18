@@ -1,10 +1,17 @@
-
 from abc import ABC, abstractmethod
-from typing import Callable, Optional, Union
+from collections.abc import Callable
 
 from smd.prompts import prompt_confirm, prompt_select, prompt_text
 from smd.steam_client import SteamInfoProvider, get_product_info
-from smd.structs import AppIDInfo, AppListChoice, DepotOrAppID, LuaParsedInfo, MainReturnCode, OrganizedAppIDs, ProductInfo
+from smd.structs import (
+    AppIDInfo,
+    AppListChoice,
+    DepotOrAppID,
+    LuaParsedInfo,
+    MainReturnCode,
+    OrganizedAppIDs,
+    ProductInfo,
+)
 from smd.utils import enter_path
 
 
@@ -16,7 +23,7 @@ class AppInjectionManager(ABC):
 
     @abstractmethod
     def add_ids(
-        self, data: Union[int, list[int], LuaParsedInfo], skip_check: bool = False
+        self, data: int | list[int] | LuaParsedInfo, skip_check: bool = False
     ) -> None:
         pass
 
@@ -30,11 +37,9 @@ class AppInjectionManager(ABC):
 
     def prompt_add_ids(self):
         validator: Callable[[str], bool] = lambda x: all(
-            [y.isdigit() for y in x.split()]
+            y.isdigit() for y in x.split()
         )
-        digit_filter: Callable[[str], list[int]] = lambda x: [
-            int(y) for y in x.split()
-        ]
+        digit_filter: Callable[[str], list[int]] = lambda x: [int(y) for y in x.split()]
         ids: list[int] = prompt_text(
             "Input IDs that you would like to add (separate them with spaces)",
             validator=validator,
@@ -43,7 +48,7 @@ class AppInjectionManager(ABC):
         self.add_ids(ids)
 
     def display_menu(self) -> MainReturnCode:
-        applist_choice: Optional[AppListChoice] = prompt_select(
+        applist_choice: AppListChoice | None = prompt_select(
             "Choose:", list(AppListChoice), cancellable=True
         )
         if applist_choice is None:
@@ -71,7 +76,7 @@ class AppInjectionManager(ABC):
 
             self.id_map[app_id] = DepotOrAppID(app_name, app_id, None)
 
-            for depot_id in depots.keys():
+            for depot_id in depots:
                 if depot_id.isdigit():
                     depot_id = int(depot_id)
                     parent_id = app_id if app_id != depot_id else None

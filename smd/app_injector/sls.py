@@ -2,7 +2,7 @@
 
 import logging
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any
 
 from colorama import Fore, Style
 from rich.console import Console
@@ -15,7 +15,8 @@ from smd.prompts import prompt_confirm, prompt_file, prompt_select
 from smd.steam_client import ParsedDLC, SteamInfoProvider
 from smd.storage.settings import get_setting, set_setting
 from smd.storage.yaml import YAMLParser
-from smd.structs import DLCTypes, LuaParsedInfo, Settings
+from smd.structs import DLCTypes, LuaParsedInfo
+from smd.ui.settings.types import Settings
 from smd.utils import enter_path
 
 logger = logging.getLogger(__name__)
@@ -65,7 +66,7 @@ class SLSManager(AppInjectionManager):
         return parser, data, apps
 
     def add_ids(
-        self, data: Union[int, list[int], LuaParsedInfo], skip_check: bool = False
+        self, data: int | list[int] | LuaParsedInfo, skip_check: bool = False
     ):
         parser = YAMLParser(self.sls_config_path)
         yaml_data = parser.read()
@@ -107,7 +108,7 @@ class SLSManager(AppInjectionManager):
                 "There are less menu items than actual IDs inside SLSsteam config."
             )
 
-        ids_to_delete_list: Optional[list[int]] = prompt_select(
+        ids_to_delete_list: list[int] | None = prompt_select(
             "Select IDs to delete from SLSsteam:",
             menu_items,
             multiselect=True,
@@ -163,7 +164,7 @@ class SLSManager(AppInjectionManager):
                     Column(header="Has Key?", justify="center"),
                     Column(header="Has Manifest?", justify="center"),
                 )
-                bool_map: dict[Optional[bool], str] = {
+                bool_map: dict[bool | None, str] = {
                     True: "[green]O[/green]",
                     False: "[red]X[/red]",
                     None: "N/A",

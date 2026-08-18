@@ -1,20 +1,18 @@
 import functools
-import os
 import shutil
-import subprocess
 import sys
 import time
-import zipfile
 from collections import OrderedDict
-from enum import Enum
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, Optional, Union
+from typing import TYPE_CHECKING
 
 from colorama import Fore, Style
 
 from smd.app_injector.applist import AppListManager
 from smd.app_injector.sls import SLSManager
 from smd.game_specific import GameHandler
+from smd.helpers.ddm import run_ddm
 from smd.lua.manager import LuaManager
 from smd.lua.writer import ACFWriter, ConfigVDFWriter
 from smd.manifest.downloader import ManifestDownloader
@@ -23,35 +21,28 @@ from smd.processes import SteamProcess
 from smd.prompts import (
     prompt_confirm,
     prompt_dir,
-    prompt_file,
-    prompt_secret,
     prompt_select,
     prompt_text,
 )
 from smd.steam_client import SteamInfoProvider
 from smd.storage.acf import ACFParser
 from smd.storage.settings import (
-    clear_setting,
-    get_setting,
-    load_all_settings,
-    set_setting,
+    get_or_default_setting,
 )
 from smd.storage.vdf import get_steam_libs, vdf_dump, vdf_load
 from smd.strings import LINUX_RELEASE_PREFIX, VERSION, WINDOWS_RELEASE_PREFIX
 from smd.structs import (
     ContextMenuOptions,
-    GameSpecificChoices,
     LoggedInUser,
     LuaChoice,
     MainReturnCode,
     OSType,
     ReleaseType,
-    SettingCustomTypes,
-    SettingOperations,
-    Settings,
 )
+from smd.ui.settings.prompt import SettingsMenuPrompt
+from smd.ui.settings.types import Settings
 from smd.updater import Updater
-from smd.utils import enter_path, root_folder
+from smd.utils import enter_path
 from smd.zip import zip_folder
 
 if sys.platform == "win32":
@@ -61,9 +52,12 @@ if sys.platform == "win32":
         uninstall_context_menu,
     )
 else:
-    install_context_menu = lambda: None  # noqa: E731
-    set_stats_and_achievements = lambda *args: False  # type: ignore # noqa: E731
-    uninstall_context_menu = lambda: None  # noqa: E731
+    install_context_menu = lambda: None
+    set_stats_and_achievements = lambda *args: False
+    uninstall_context_menu = lambda: None
+
+if TYPE_CHECKING:
+    from smd.ui.main_menu import GameSpecificMenuItem
 
 
 def music_toggle_decorator(func):  # type: ignore
@@ -87,12 +81,7 @@ def music_toggle_decorator(func):  # type: ignore
 
 
 class UI:
-    def __init__(
-        self,
-        provider: SteamInfoProvider,
-        steam_path: Path,
-        os_type: OSType
-    ):
+    def __init__(self, provider: SteamInfoProvider, steam_path: Path, os_type: OSType):
         self.provider = provider
         self.steam_path = steam_path
         self.app_list_man = (
@@ -108,11 +97,9 @@ class UI:
         self.init_midi_player()
 
     def init_midi_player(self):
-        if (play_music := get_setting(Settings.PLAY_MUSIC)) is None:
-            set_setting(Settings.PLAY_MUSIC, False)
-            play_music = False
+        play_music = get_or_default_setting(Settings.PLAY_MUSIC, False)
 
-        if any([not x.value.exists() for x in list(MidiFiles)]) or not play_music:
+        if any(not x.value.exists() for x in list(MidiFiles)) or not play_music:
             self.midi_player = None
         else:
             self.midi_player = MidiPlayer(MidiFiles.MIDI_PLAYER_DLL.value)
@@ -135,89 +122,22 @@ class UI:
         else:
             ignore = []
 
-        while True:
-            saved_settings = load_all_settings()
-            selected_key: Optional[Settings] = prompt_select(
-                "Select a setting to change:",
-                [
-                    (
-                        x.clean_name
-                        + (
-                            " (unset)"
-                            if x.key_name not in saved_settings
-                            else (
-                                f": {saved_settings.get(x.key_name)}"
-                                if not x.hidden
-                                else ": [ENCRYPTED]"
-                            )
-                        ),
-                        x,
-                    )
-                    for x in Settings if x not in ignore
-                ],
-                cancellable=True,
-            )
-            if not selected_key:
-                break
-            value = saved_settings.get(selected_key.key_name)
-            value = value if value is not None else "(unset)"
-            print(
-                f"{selected_key.clean_name} is set to "
-                + Fore.YELLOW
-                + ("[ENCRYPTED]" if selected_key.hidden else str(value))
-                + Style.RESET_ALL
-            )
-            operation: Optional[SettingOperations] = prompt_select(
-                "What do you want to do with this setting?",
-                list(SettingOperations),
-                cancellable=True,
-            )
+        menu = SettingsMenuPrompt(
+            ignore_list=ignore, on_setting_changed=self._handle_setting_change
+        )
+        menu.execute()
 
-            if operation is None:
-                continue
-
-            if operation == SettingOperations.DELETE:
-                clear_setting(selected_key)
-                continue
-
-            if operation == SettingOperations.EDIT:
-                new_settings_value: Union[str, bool]
-                if selected_key.type == bool:
-                    new_settings_value = prompt_confirm(
-                        "Select the new value:", "Enable", "Disable"
-                    )
-                elif isinstance(selected_key.type, list):
-                    enum_val: Enum = prompt_select(
-                        "Select the new value:", selected_key.type
-                    )
-                    new_settings_value = enum_val.value
-                elif selected_key.type == str:
-                    func = prompt_secret if selected_key.hidden else prompt_text
-                    new_settings_value = func("Enter the new value:")
-                elif selected_key.type == SettingCustomTypes.DIR:
-                    new_settings_value = str(
-                        prompt_dir("Enter the new directory:").resolve()
-                    )
-                elif selected_key.type == SettingCustomTypes.FILE:
-                    new_settings_value = str(
-                        prompt_file("Enter the new file path:").resolve()
-                    )
-                else:
-                    raise Exception("Unhandled setting type. Shouldn't happen.")
-                set_setting(selected_key, new_settings_value)
-
-                if selected_key == Settings.PLAY_MUSIC:
-                    if value is True and new_settings_value is False:
-                        self.kill_midi_player()
-                    elif value is False and new_settings_value is True:
-                        self.init_midi_player()
-
-                if (
-                    selected_key == Settings.APPLIST_FOLDER
-                    and self.os_type == OSType.WINDOWS
-                ):
-                    self.app_list_man = AppListManager(self.steam_path, self.provider)
         return MainReturnCode.LOOP_NO_PROMPT
+
+    def _handle_setting_change(self, key: Settings, old_val, new_val):
+        if key == Settings.PLAY_MUSIC:
+            if old_val is True and new_val is False:
+                self.kill_midi_player()
+            elif old_val is False and new_val is True:
+                self.init_midi_player()
+
+        elif key == Settings.APPLIST_FOLDER and self.os_type == OSType.WINDOWS:
+            self.app_list_man = AppListManager(self.steam_path, self.provider)
 
     @music_toggle_decorator
     def offline_fix_menu(self) -> MainReturnCode:
@@ -256,7 +176,7 @@ class UI:
         offline_converter: Callable[[str], str] = lambda x: (
             "ONLINE" if x == "0" else "OFFLINE"
         )
-        chosen_user: Optional[LoggedInUser] = prompt_select(
+        chosen_user: LoggedInUser | None = prompt_select(
             "Select a user: ",
             [
                 (
@@ -289,7 +209,7 @@ class UI:
         steam_libs = get_steam_libs(self.steam_path)
         if len(steam_libs) == 1:
             return steam_libs[0]
-        steam_lib_path: Optional[Path] = prompt_select(
+        steam_lib_path: Path | None = prompt_select(
             "Select a Steam library location:",
             steam_libs,
             cancellable=True,
@@ -298,16 +218,45 @@ class UI:
         return steam_lib_path
 
     @music_toggle_decorator
-    def handle_game_specific(self, choice: GameSpecificChoices) -> MainReturnCode:
+    def handle_game_specific(self, choice: "GameSpecificMenuItem") -> MainReturnCode:
         injection_manager = self.app_list_man or self.sls_man
         if injection_manager is None:
             print("Unsupported OS for this action.")
             return MainReturnCode.LOOP_NO_PROMPT
 
-        if (lib_path := self.select_steam_library()) is None:
-            return MainReturnCode.LOOP_NO_PROMPT
+        steam_or_not = (
+            prompt_select(
+                "Game selection method:", [("Steam Library", 0), ("Custom Folder", 1)]
+            )
+            if choice.can_select_external
+            else (
+                prompt_select(
+                    "This operation requires an App ID:",
+                    [("Obtain automatically via Steam Library", 0), ("Specify App ID Manually", 2)],
+                )
+                if choice.require_only_app_id
+                else 0
+            )
+        )
+        lib_path = None
+        custom_game_path = None
+        force_app_id = None
+        match steam_or_not:
+            case 0:
+                if (lib_path := self.select_steam_library()) is None:
+                    return MainReturnCode.LOOP_NO_PROMPT
+            case 1:
+                custom_game_path = prompt_dir("Paste game directory:")
+            case 2:
+                force_app_id = prompt_text("Input App ID:").strip()
+
         handler = GameHandler(
-            self.steam_path, lib_path, self.provider, injection_manager
+            self.steam_path,
+            lib_path,
+            custom_game_path,
+            force_app_id,
+            self.provider,
+            injection_manager,
         )
         return handler.execute_choice(choice)
 
@@ -345,6 +294,12 @@ class UI:
             default=False,
         )
         manifests = downloader.download_manifests(parsed_lua, decrypt=decrypt)
+
+        use_ddm = get_or_default_setting(Settings.SEND_TO_DDM, False)
+        if use_ddm:
+            run_ddm(parsed_lua, manifests)
+            return MainReturnCode.LOOP
+
         move_files = prompt_confirm(
             "Manifests are now in the depotcache folder. "
             "Would you like to transfer these files to another folder?",
@@ -383,7 +338,7 @@ class UI:
                 else:
                     target_zip = dst / f"{unique_name}.zip"
                     zip_folder(dst, target_zip)
-                    for file in map(lambda x: dst / x.name, manifests):
+                    for file in ((dst / x.name) for x in manifests):
                         file.unlink(missing_ok=True)
         if steam_proc:
             auto_launch = steam_proc.prompt_launch_or_restart()
@@ -398,9 +353,13 @@ class UI:
                 print(f"Files can be found in {dst}")
         else:
             extra_msg = (
-                "Close Steam and run DLLInjector again "
-                "(or not depending on how you installed Greenluma). "
-            ) if not auto_launch else ""
+                (
+                    "Close Steam and run DLLInjector again "
+                    "(or not depending on how you installed Greenluma). "
+                )
+                if not auto_launch
+                else ""
+            )
             print(
                 extra_msg + 'Your game should show up in the library ready to "update"',
                 end="",
@@ -409,7 +368,7 @@ class UI:
         return MainReturnCode.LOOP
 
     @music_toggle_decorator
-    def process_lua_full(self, file: Optional[Path] = None) -> MainReturnCode:
+    def process_lua_full(self, file: Path | None = None) -> MainReturnCode:
         """Processes a .lua file and goes through all the usual steps"""
         if (lib_path := self.select_steam_library()) is None:
             return MainReturnCode.LOOP_NO_PROMPT
@@ -446,16 +405,18 @@ class UI:
         print(Fore.YELLOW + "\nDownloading Manifests:" + Style.RESET_ALL)
         manifests = downloader.download_manifests(parsed_lua)
 
+        use_ddm = get_or_default_setting(Settings.SEND_TO_DDM, False)
+        if use_ddm:
+            run_ddm(parsed_lua, manifests, lib_path)
+
         if self.sls_man:
             unique_name = f"{parsed_lua.app_id}_{time.time()}"
             # TODO: this tmp dir really isnt needed
             dst = Path.home() / f"Downloads/{unique_name}"
             dst.mkdir(parents=True, exist_ok=True)
-            for file in manifests:
-                shutil.move(file, dst / file.name)
-            with (dst / f"{parsed_lua.app_id}.lua").open(
-                "w", encoding="utf-8"
-            ) as f:
+            for m_file in manifests:
+                shutil.move(m_file, dst / m_file.name)
+            with (dst / f"{parsed_lua.app_id}.lua").open("w", encoding="utf-8") as f:
                 f.write(parsed_lua.contents)
             target_zip = dst.parent / f"{unique_name}.zip"
             zip_folder(dst, target_zip)
@@ -475,9 +436,13 @@ class UI:
 
         if self.app_list_man:
             extra_msg = (
-                "Close Steam and run DLLInjector again "
-                "(or not depending on how you installed Greenluma). "
-            ) if not auto_launch else ""
+                (
+                    "Close Steam and run DLLInjector again "
+                    "(or not depending on how you installed Greenluma). "
+                )
+                if not auto_launch
+                else ""
+            )
             print(
                 Fore.GREEN + f"\nSuccess! {extra_msg}"
                 'Your game should show up in the library ready to "update"'
@@ -486,7 +451,7 @@ class UI:
         return MainReturnCode.LOOP
 
     def manage_context_menu(self) -> MainReturnCode:
-        choice: Optional[ContextMenuOptions] = prompt_select(
+        choice: ContextMenuOptions | None = prompt_select(
             "Select an operation for the context menu:",
             list(ContextMenuOptions),
             cancellable=True,
@@ -499,12 +464,12 @@ class UI:
             uninstall_context_menu()
         return MainReturnCode.LOOP_NO_PROMPT
 
-    def check_updates(self, os_type: OSType, test: bool = False) -> MainReturnCode:
+    def check_updates(self, test: bool = False) -> MainReturnCode:
         if not getattr(sys, "frozen", False):
             print("Program isn't frozen. You can't update.")
             return MainReturnCode.LOOP_NO_PROMPT
 
-        release_type: Optional[ReleaseType] = prompt_select(
+        release_type: ReleaseType | None = prompt_select(
             "Which type of release would you like to update to?",
             list(ReleaseType),
             cancellable=True,
@@ -536,9 +501,9 @@ class UI:
             return MainReturnCode.LOOP_NO_PROMPT
         download_url = None
         for asset in assets:
-            if os_type == OSType.WINDOWS:
+            if self.os_type == OSType.WINDOWS:
                 target_prefix = WINDOWS_RELEASE_PREFIX
-            elif os_type == OSType.LINUX:
+            elif self.os_type == OSType.LINUX:
                 target_prefix = LINUX_RELEASE_PREFIX
             else:
                 print("Unsupported OS. Cannot update.")
@@ -551,9 +516,9 @@ class UI:
             print("Couldn't find the download URL :(")
             return MainReturnCode.LOOP_NO_PROMPT
         print(f"Download URL: {download_url}")
-        if os_type == OSType.WINDOWS:
+        if self.os_type == OSType.WINDOWS:
             Updater.download_for_windows(download_url)
-        elif os_type == OSType.LINUX:
+        elif self.os_type == OSType.LINUX:
             Updater.download_for_linux(download_url)
         return MainReturnCode.LOOP_NO_PROMPT
 
@@ -602,17 +567,13 @@ class UI:
                     return MainReturnCode.LOOP_NO_PROMPT
                 if not in_backup:
                     lua_manager.backup_lua(parsed_lua)
-                print(
-                    Fore.YELLOW
-                    + "\nDownloading Manifests:"
-                    + Style.RESET_ALL
-                )
+                print(Fore.YELLOW + "\nDownloading Manifests:" + Style.RESET_ALL)
                 downloader.download_manifests(parsed_lua, auto_manifest=True)
         if steam_proc:
             steam_proc.prompt_launch_or_restart()
         print(
             Fore.GREEN + "\nSuccess! All game manifests have been updated!\n"
-            "Try updating them via Steam."
-            + Style.RESET_ALL
+            "Try updating them via Steam." + Style.RESET_ALL
         )
+        return MainReturnCode.LOOP
         return MainReturnCode.LOOP

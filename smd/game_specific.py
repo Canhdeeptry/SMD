@@ -8,11 +8,15 @@ import shlex
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Literal, NamedTuple, Optional, overload
+from tempfile import TemporaryDirectory
+from typing import TYPE_CHECKING, Literal, NamedTuple, overload
 
 from colorama import Fore, Style
 
+from smd.ach_gen import gen_achievements
 from smd.app_injector.base import AppInjectionManager
+from smd.helpers.ddm import run_ddm
+from smd.lua.manager import LuaManager
 from smd.manifest.downloader import ManifestDownloader
 from smd.manifest.ugc_resolver import (
     DirectDownloadUrl,
@@ -29,18 +33,19 @@ from smd.prompts import (
     prompt_text,
 )
 from smd.steam_client import SteamInfoProvider, get_product_info
-from smd.storage.settings import get_setting, set_setting
+from smd.storage.settings import get_or_default_setting, get_setting, set_setting
 from smd.storage.vdf import vdf_load
 from smd.structs import (
-    GameSpecificChoices,
     GenEmuMode,
-    MainMenu,
     MainReturnCode,
     OSType,
     ProductInfo,
-    Settings,
 )
+from smd.ui.settings.types import AchievementGenMode, Settings
 from smd.utils import enter_path, get_os_type, root_folder
+
+if TYPE_CHECKING:
+    from smd.ui.main_menu import GameSpecificMenuItem
 
 logger = logging.getLogger(__name__)
 
@@ -58,35 +63,53 @@ class GameHandler:
     def __init__(
         self,
         steam_root: Path,
-        library_path: Path,
+        library_path: Path | None,
+        custom_game_path: Path | None,
+        force_app_id: str | None,
         provider: SteamInfoProvider,
         injection_manager: AppInjectionManager,
     ):
         self.steam_root = steam_root
-        self.steamapps_path = library_path / "steamapps"
+        self.steamapps_path = library_path / "steamapps" if library_path else None
+        self.custom_game_path = custom_game_path
+        self.force_app_id = force_app_id
         self.provider = provider
         self.injection_manager = injection_manager
 
-    def get_game(self) -> Optional[ACFInfo]:
-        games: list[tuple[AppName, ACFInfo]] = []
-        for path in self.steamapps_path.glob("*.acf"):
-            app_acf = vdf_load(path)
-            app_state = app_acf.get("AppState", {})
-            name = app_state.get("name")
-            installdir = app_state.get("installdir")
-            app_id = app_state.get("appid") or app_state.get("AppID")
-            games.append(
-                (name, ACFInfo(app_id, self.steamapps_path / "common" / installdir))
-            )
-        return prompt_select(
-            "Select a game (You can type btw)",
-            games,
-            fuzzy=True,
-            max_height=10,
-            cancellable=True,
-        )
+    def get_game(self) -> ACFInfo | None:
+        """Lets user select a game from a steam libraruy
 
-    def find_steam_dll(self, game_path: Path) -> Optional[Path]:
+        Returns:
+            ACFInfo | None: (app_id, path to install dir)
+        """
+        if self.steamapps_path is None and self.custom_game_path is None and self.force_app_id is None:
+            raise ValueError(
+                "At least one of (steamapps_path, custom_game_path and self.force_app_id) should be not None"
+            )
+        if self.steamapps_path:
+            games: list[tuple[AppName, ACFInfo]] = []
+            for path in self.steamapps_path.glob("*.acf"):
+                app_acf = vdf_load(path)
+                app_state = app_acf.get("AppState", {})
+                name = app_state.get("name")
+                installdir = app_state.get("installdir")
+                app_id = app_state.get("appid") or app_state.get("AppID")
+                games.append(
+                    (name, ACFInfo(app_id, self.steamapps_path / "common" / installdir))
+                )
+            return prompt_select(
+                "Select a game (You can type btw)",
+                games,
+                fuzzy=True,
+                max_height=10,
+                cancellable=True,
+            )
+        elif self.custom_game_path:
+            app_id = prompt_text("What is your App ID?")
+            return ACFInfo(app_id, self.custom_game_path)
+        elif self.force_app_id:
+            return ACFInfo(self.force_app_id, Path.cwd())  # TODO: unused 2nd parameter, see `GameSpecificMenuItem.require_only_app_id`
+    def find_steam_dll(self, game_path: Path) -> Path | None:
         files = list(game_path.rglob("steam_api*.dll"))
         if len(files) > 1:
             return prompt_select(
@@ -114,13 +137,15 @@ class GameHandler:
         self,
         app_id: str,
         mode: GenEmuMode,
-        dst_steam_settings_folder: Optional[Path] = None,
+        dst_steam_settings_folder: Path | None = None,
     ):
-        if mode in (GenEmuMode.STEAM_SETTINGS, GenEmuMode.ALL):
-            if dst_steam_settings_folder is None:
-                raise ValueError(
-                    "dst_steam_settings_folder is required for STEAM_SETTINGS or ALL."
-                )
+        if (
+            mode in (GenEmuMode.STEAM_SETTINGS, GenEmuMode.ALL)
+            and dst_steam_settings_folder is None
+        ):
+            raise ValueError(
+                "dst_steam_settings_folder is required for STEAM_SETTINGS or ALL."
+            )
 
         tools_folder = root_folder() / "third_party/gbe_fork_tools/generate_emu_config/"
         config_exe = tools_folder / (
@@ -155,11 +180,7 @@ class GameHandler:
             extra_args.extend(["-skip_con", "-skip_inv"])
         cmds = [str(config_exe.absolute()), "-clean", *extra_args, app_id]
         logger.debug(f"Running {shlex.join(cmds)}")
-        subprocess.run(
-            cmds,
-            env=env,
-            cwd=str(tools_folder.absolute()),
-        )
+        subprocess.run(cmds, env=env, cwd=str(tools_folder.absolute()), check=True)
         backup_folder = tools_folder / f"backup/{app_id}"
         src_steam_settings = tools_folder / f"output/{app_id}/steam_settings"
 
@@ -171,7 +192,7 @@ class GameHandler:
             for bin_file in bin_files:
                 bin_file_count += 1
                 shutil.copy(bin_file, steam_stats_folder)
-                print(f"{bin_file.name} copied to {str(steam_stats_folder)}")
+                print(f"{bin_file.name} copied to {steam_stats_folder!s}")
 
             if bin_file_count == 0:
                 id_64 = prompt_text(
@@ -198,7 +219,7 @@ class GameHandler:
             if not dst_user_stats.exists():
                 shutil.copy(src_user_stats, dst_user_stats)
                 print(
-                    f"{str(src_user_stats.relative_to(root_folder()))} copied to "
+                    f"{src_user_stats.relative_to(root_folder())!s} copied to "
                     + str(dst_user_stats)
                 )
             else:
@@ -210,7 +231,7 @@ class GameHandler:
                 src_steam_settings, dst_steam_settings_folder, dirs_exist_ok=True
             )
             print(
-                f"{str(src_steam_settings.relative_to(root_folder()))} copied to "
+                f"{src_steam_settings.relative_to(root_folder())!s} copied to "
                 + str(dst_steam_settings_folder)
             )
 
@@ -252,14 +273,22 @@ class GameHandler:
 
     def crack_dll(self, app_id: str, dll_path: Path):
         self._crack_dll_core(app_id, dll_path)
-        gen_achievements = prompt_confirm(
+        do_gen_achievements = prompt_confirm(
             "Would you like to generate config files for gbe_fork? "
             "(Contains achievement data)"
         )
-        if gen_achievements:
-            self.run_gen_emu(
-                app_id, GenEmuMode.STEAM_SETTINGS, dll_path.parent / "steam_settings"
+        if do_gen_achievements:
+            gen_mode = get_or_default_setting(
+                Settings.ACHIEVE_GEN_MODE, AchievementGenMode.STABLE.value
             )
+            if AchievementGenMode(gen_mode) == AchievementGenMode.STABLE:
+                self.run_gen_emu(
+                    app_id,
+                    GenEmuMode.STEAM_SETTINGS,
+                    dll_path.parent / "steam_settings",
+                )
+            elif AchievementGenMode(gen_mode) == AchievementGenMode.EXPERIMENTAL:
+                gen_achievements(app_id, dll_path.parent / "steam_settings")
 
     def apply_steamless(self, app_info: ACFInfo):
         game_exe = self.select_executable(app_info)
@@ -270,6 +299,7 @@ class GameHandler:
             [str(steamless_exe.absolute()), str(game_exe.absolute())],
             encoding="utf-8",
             capture_output=True,
+            check=True,
         )
         if "Successfully unpacked file!" in output.stdout:
             print("Steamless applied!")
@@ -285,9 +315,7 @@ class GameHandler:
         exes = [
             (str(x.relative_to(app_info.path)), x) for x in app_info.path.rglob("*.exe")
         ] + [("(It's still not here)", None)]
-        game_exe: Optional[Path] = prompt_select(
-            "Select the .exe:", exes, default=exes[0]
-        )
+        game_exe: Path | None = prompt_select("Select the .exe:", exes, default=exes[0])
         if game_exe is None:
             return prompt_file("Paste the path of the .exe:")
         return game_exe
@@ -313,10 +341,10 @@ class GameHandler:
 
         windows_exes = list(set(windows_exes))
 
-        chosen: Optional[str] = prompt_select(
+        chosen: str | None = prompt_select(
             "Choose the exe:",
             windows_exes + [("(The .exe I want isn't listed here)", None)],
-            default=windows_exes[0]
+            default=windows_exes[0],
         )
         if chosen is None:
             return self._prompt_manual_exe(app_info)
@@ -338,46 +366,77 @@ class GameHandler:
             return int(match.group())
 
         workshop_id: int = prompt_text(
-            "Paste workshop item URL or item ID:",
-            validator=validate,
-            filter=filter
+            "Paste workshop item URL or item ID:", validator=validate, filter=filter
         )
         ctx = WorkshopItemContext(self.provider.client, workshop_id)
         content, method = ugc_resolver.resolve(ctx)
         if isinstance(content, DirectDownloadUrl):
-            print("This is a legacy workshop item. "
-                  "It can be directly downloaded through"
-                  " the following URL. It's just a ZIP file:\n"
-                  f"{Fore.BLUE + content.url + Style.RESET_ALL}")
+            print(
+                "This is a legacy workshop item. "
+                "It can be directly downloaded through"
+                " the following URL. It's just a ZIP file:\n"
+                f"{Fore.BLUE + content.url + Style.RESET_ALL}"
+            )
         else:  # HContentFile type
             print(f"Found UGC ID via {method} method: {content.ugc_id}")
-            downloader = ManifestDownloader(self.provider, self.steam_root)
-            downloader.download_workshop_item(app_id, str(content.ugc_id))
-            print(
-                Fore.GREEN
-                + "Workshop item manifest downloaded! Try downloading it now."
-                + Style.RESET_ALL
-            )
 
-    def execute_choice(self, choice: GameSpecificChoices) -> MainReturnCode:
+            downloader = ManifestDownloader(self.provider, self.steam_root)
+            use_ddm = get_or_default_setting(Settings.SEND_TO_DDM, False)
+            if use_ddm:
+                with TemporaryDirectory() as temp_dir:
+                    manifest_path = downloader.download_workshop_item(
+                        app_id, str(content.ugc_id), Path(temp_dir)
+                    )
+                    if manifest_path is None:
+                        print("Failed to download workshop item.")
+                        return
+                    print("We're gonna need a decryption key from a lua file...")
+                    lua_manager = LuaManager(get_os_type())
+                    parsed_lua = lua_manager.fetch_lua_strict()
+                    lua_manager.backup_lua(parsed_lua)
+
+                    def dir_transformer(path: Path) -> Path:
+                        return (
+                            path.parent
+                            / (path.name.strip() + " (Workshop)")
+                            / str(workshop_id)
+                        )
+
+                    run_ddm(
+                        parsed_lua,
+                        [manifest_path],
+                        target_dir_transformer=dir_transformer,
+                    )
+            else:
+                downloader.download_workshop_item(app_id, str(content.ugc_id))
+                print(
+                    Fore.GREEN
+                    + "Workshop item manifest downloaded! Try downloading it now."
+                    + Style.RESET_ALL
+                )
+
+    def _find_and_crack_dll(self, app_info: ACFInfo):
+        dll = self.find_steam_dll(app_info.path)
+        if dll is None:
+            print(
+                "Could not find steam_api DLL. "
+                "Maybe you haven't downloaded the game yet..."
+            )
+        else:
+            self.crack_dll(app_info.app_id, dll)
+
+    def _gen_usr_game_stats(self, app_info: ACFInfo):
+        self.run_gen_emu(app_info.app_id, GenEmuMode.USER_GAME_STATS)
+
+    def _check_dlc(self, app_info: ACFInfo):
+        self.injection_manager.dlc_check(self.provider, int(app_info.app_id))
+
+    def _dl_workshop_manifest(self, app_info: ACFInfo):
+        self.download_workshop_manifest(app_info.app_id)
+
+    def execute_choice(self, choice: "GameSpecificMenuItem") -> MainReturnCode:
         app_info = self.get_game()
         if app_info is None:
             return MainReturnCode.LOOP_NO_PROMPT
-        if choice == MainMenu.CRACK_GAME:
-            dll = self.find_steam_dll(app_info.path)
-            if dll is None:
-                print(
-                    "Could not find steam_api DLL. "
-                    "Maybe you haven't downloaded the game yet..."
-                )
-            else:
-                self.crack_dll(app_info.app_id, dll)
-        elif choice == MainMenu.REMOVE_DRM:
-            self.apply_steamless(app_info)
-        elif choice == MainMenu.DL_USER_GAME_STATS:
-            self.run_gen_emu(app_info.app_id, GenEmuMode.USER_GAME_STATS)
-        elif choice == MainMenu.DLC_CHECK:
-            self.injection_manager.dlc_check(self.provider, int(app_info.app_id))
-        elif choice == MainMenu.DL_WORKSHOP_ITEM:
-            self.download_workshop_manifest(app_info.app_id)
+        choice.action(self, app_info)
         return MainReturnCode.LOOP

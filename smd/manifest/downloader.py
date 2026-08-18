@@ -3,7 +3,7 @@ import logging
 import shutil
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Optional, Union, cast
+from typing import Any, cast
 from urllib.parse import urljoin
 
 import gevent
@@ -132,14 +132,14 @@ class ManifestDownloader:
     def download_morrenus_manifest(self, depot_id: str, manifest_id: str):
         morrenus_key = resolve_morrenus_key()
         url = (
-            urljoin(MORRENUS_BASE_URL, "/api/v1/generate/manifest?") +
-            f"depot_id={depot_id}&manifest_id={manifest_id}&api_key={morrenus_key}"
+            urljoin(MORRENUS_BASE_URL, "/api/v1/generate/manifest?")
+            + f"depot_id={depot_id}&manifest_id={manifest_id}&api_key={morrenus_key}"
         )
         return get_request_raw(url)
 
     def download_single_manifest(
-        self, depot_id: str, manifest_id: str, cdn_client: Optional[CDNClient] = None
-    ) -> tuple[Union[bytes, None], bool]:
+        self, depot_id: str, manifest_id: str, cdn_client: CDNClient | None = None
+    ) -> tuple[bytes | None, bool]:
         """Returns (encrypted manifest file as bytes, is_zipped (direct from Steam) )"""
         if cdn_client is None:
             cdn_client = self.get_cdn_client()
@@ -169,8 +169,11 @@ class ManifestDownloader:
                 break
             choice: int = prompt_select(
                 "Request code endpoint died. Would you like to try again?",
-                [("Yes", 0), ("No (Manually input request code)", 1),
-                 ("Try something else.", 2)]
+                [
+                    ("Yes", 0),
+                    ("No (Manually input request code)", 1),
+                    ("Try something else.", 2),
+                ],
             )
             if choice == 0:
                 continue
@@ -183,7 +186,7 @@ class ManifestDownloader:
             break
         return req_code
 
-    def download_workshop_item(self, app_id: str, ugc_id: str):
+    def download_workshop_item(self, app_id: str, ugc_id: str, out_dir: Path | None = None):
         manifest, is_zipped = self.download_single_manifest(app_id, ugc_id)
         if manifest:
             if is_zipped:
@@ -194,16 +197,15 @@ class ManifestDownloader:
                 extracted = BytesIO(manifest)
             depotcache = self.steam_path / "depotcache"
             depotcache.mkdir(exist_ok=True)
-            final_manifest_loc = (
-                depotcache / f"{app_id}_{ugc_id}.manifest"
-            )
+            final_manifest_loc = (out_dir if out_dir else depotcache) / f"{app_id}_{ugc_id}.manifest"
             with final_manifest_loc.open("wb") as f:
                 f.write(extracted.read())
+            return final_manifest_loc
 
     def download_manifests(
         self, lua: LuaParsedInfo, decrypt: bool = False, auto_manifest: bool = False
     ):
-        """Gets latest manifest IDs and downloads respective manifests"""
+        """Gets latest manifest IDs and downloads respective manifests to depotcache folder"""
         cdn = self.get_cdn_client()
         manifest_ids = self.get_manifest_ids(lua, auto_manifest)
 
@@ -229,9 +231,7 @@ class ManifestDownloader:
             )
             depotcache = self.steam_path / "depotcache"
             depotcache.mkdir(exist_ok=True)
-            final_manifest_loc = (
-                depotcache / f"{depot_id}_{manifest_id}.manifest"
-            )
+            final_manifest_loc = depotcache / f"{depot_id}_{manifest_id}.manifest"
 
             if possible_saved_manifest.exists():
                 print("One of the endpoints had a manifest. Skipping download...")

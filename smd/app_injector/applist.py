@@ -3,7 +3,6 @@
 import logging
 from collections import defaultdict
 from pathlib import Path
-from typing import Optional, Union
 
 from colorama import Fore, Style
 from rich.console import Console
@@ -19,8 +18,8 @@ from smd.structs import (
     AppListPathAndID,
     DLCTypes,
     LuaParsedInfo,
-    Settings,
 )
+from smd.ui.settings.types import Settings
 from smd.utils import enter_path
 
 logger = logging.getLogger(__name__)
@@ -86,8 +85,7 @@ class AppListManager(AppInjectionManager):
                 logger.debug(f"[get_local_ids] Ignored {file.name}")
                 continue
             file_idx = int(file.stem)
-            if file_idx > self.last_idx:
-                self.last_idx = file_idx
+            self.last_idx = max(self.last_idx, file_idx)
 
             contents = file.read_text(encoding="utf-8").strip()
 
@@ -105,7 +103,7 @@ class AppListManager(AppInjectionManager):
         return ids
 
     def add_ids(
-        self, data: Union[int, list[int], LuaParsedInfo], skip_check: bool = False
+        self, data: int | list[int] | LuaParsedInfo, skip_check: bool = False
     ):
         """Adds IDs to the AppList folder"""
         if isinstance(data, int):
@@ -179,11 +177,8 @@ class AppListManager(AppInjectionManager):
         # app id mapped to files that have that ID
         for x in path_and_ids:
             file_map[x.app_id].append(x.path)
-        paths_to_delete: list[Path] = []
-        for app_id in app_ids:
-            for path in file_map[app_id]:
-                paths_to_delete.append(path)
-        return paths_to_delete
+        paths: list[Path] = [path for app_id in app_ids for path in file_map[app_id]]
+        return paths
 
     def prompt_id_deletion(self):
         """Show all AppList IDs and let the user delete them"""
@@ -209,7 +204,7 @@ class AppListManager(AppInjectionManager):
         if len(menu_items) < len(local_ids):
             logger.warning("There are less menu items than actual IDs inside AppList.")
 
-        ids_to_delete_list: Optional[list[int]] = prompt_select(
+        ids_to_delete_list: list[int] | None = prompt_select(
             "Select IDs to delete from AppList:",
             menu_items,
             multiselect=True,
@@ -241,8 +236,7 @@ class AppListManager(AppInjectionManager):
             dlc_info = get_product_info(provider, dlcs)
             config = ConfigVDFWriter(self.steam_path)
             manifest = ManifestDownloader(self.provider, self.steam_path)
-            if dlc_info:
-                if apps := dlc_info.get("apps"):
+            if dlc_info and (apps := dlc_info.get("apps")):
                     unowned_non_depot_dlcs: list[int] = []
                     local_ids = [x.app_id for x in self.get_local_ids()]
                     parsed_dlcs: list[ParsedDLC] = [
@@ -266,7 +260,7 @@ class AppListManager(AppInjectionManager):
                         Column(header="Has Key?", justify="center"),
                         Column(header="Has Manifest?", justify="center"),
                     )
-                    bool_map: dict[Optional[bool], str] = {
+                    bool_map: dict[bool | None, str] = {
                         True: "[green]O[/green]",
                         False: "[red]X[/red]",
                         None: "N/A",
