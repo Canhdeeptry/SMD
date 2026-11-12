@@ -1,3 +1,20 @@
+## 4.5.0-beta.2 (2026-10-26)
+
+### Feat
+
+- add manifestdex as fallback for MRCs (+refactor)
+
+### Fix
+
+- clarify request code fallback option
+
+## 4.5.0-beta.1 (2026-09-21)
+
+### Fix
+
+- ask confirmation when assuming app id + auto fill prompt with filename when asking for manual app id
+- use filename for getting main app ids from lua files
+
 ## 4.5.0-beta.0 (2026-08-12)
 
 ### Feat

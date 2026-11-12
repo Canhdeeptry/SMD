@@ -10,7 +10,7 @@ import gevent
 from colorama import Fore, Style
 from steam.client.cdn import CDNClient, ContentServer  # type: ignore
 
-from smd.http_utils import get_gmrc, get_request_raw
+from smd.http_utils import get_request_raw
 from smd.manifest.crypto import decrypt_and_save_manifest
 from smd.manifest.id_resolver import (
     IManifestStrategy,
@@ -21,6 +21,7 @@ from smd.manifest.id_resolver import (
     SharedDepotManifestStrategy,
     StandardManifestStrategy,
 )
+from smd.mrc import get_gmrc
 from smd.prompts import prompt_select, prompt_text
 from smd.steam_client import SteamInfoProvider, get_product_info
 from smd.storage.settings import resolve_morrenus_key
@@ -172,7 +173,7 @@ class ManifestDownloader:
                 [
                     ("Yes", 0),
                     ("No (Manually input request code)", 1),
-                    ("Try something else.", 2),
+                    ("I don't have any request codes. Try something else.", 2),
                 ],
             )
             if choice == 0:
@@ -186,7 +187,9 @@ class ManifestDownloader:
             break
         return req_code
 
-    def download_workshop_item(self, app_id: str, ugc_id: str, out_dir: Path | None = None):
+    def download_workshop_item(
+        self, app_id: str, ugc_id: str, out_dir: Path | None = None
+    ):
         manifest, is_zipped = self.download_single_manifest(app_id, ugc_id)
         if manifest:
             if is_zipped:
@@ -197,7 +200,9 @@ class ManifestDownloader:
                 extracted = BytesIO(manifest)
             depotcache = self.steam_path / "depotcache"
             depotcache.mkdir(exist_ok=True)
-            final_manifest_loc = (out_dir if out_dir else depotcache) / f"{app_id}_{ugc_id}.manifest"
+            final_manifest_loc = (
+                out_dir if out_dir else depotcache
+            ) / f"{app_id}_{ugc_id}.manifest"
             with final_manifest_loc.open("wb") as f:
                 f.write(extracted.read())
             return final_manifest_loc
