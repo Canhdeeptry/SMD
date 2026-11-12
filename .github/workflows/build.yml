@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: '0 0 * * 0'
   workflow_dispatch:
+    inputs:
+      force:
+        description: "Rebuild even if a release already exists for this commit"
+        type: boolean
+        default: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -12,62 +17,131 @@ env:
 permissions:
   contents: write
 
+concurrency:
+  group: smd-build
+  cancel-in-progress: false
+
 jobs:
-  check_and_build:
+  # ---------------------------------------------------------------
+  # 1) Sync fork -> check upstream (stable + beta) -> build matrix
+  # ---------------------------------------------------------------
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      count: ${{ steps.plan.outputs.count }}
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      FORK: ${{ github.repository }}
+    steps:
+    - name: Sync fork with upstream
+      id: sync
+      continue-on-error: true
+      run: |
+        # Same as the "Sync fork" button on GitHub (merges upstream/main into fork/main)
+        gh api -X POST "repos/$FORK/merge-upstream" -f branch=main
+
+    - name: Plan builds
+      id: plan
+      run: |
+        set -euo pipefail
+        UP="$UPSTREAM_REPO"
+        FORCE="${{ github.event_name == 'workflow_dispatch' && inputs.force }}"
+
+        exists() { gh release view "$1" --repo "$FORK" >/dev/null 2>&1; }
+
+        # If sync fails (conflict / upstream changed workflow files...), build straight from upstream
+        if [ "${{ steps.sync.outcome }}" = "success" ]; then
+          S_REPO="$FORK"
+        else
+          echo "::warning::Fork sync failed, stable will be built directly from upstream main"
+          S_REPO="$UP"
+        fi
+
+        ENTRIES='[]'
+
+        # ---------- STABLE ----------
+        S_SHA=$(gh api "repos/$S_REPO/commits/main" --jq .sha)
+        S_REL=$(gh api "repos/$UP/releases/latest")
+        S_TAG=$(jq -r .tag_name <<<"$S_REL")
+        S_VER="${S_TAG#v}"
+        S_DATE=$(jq -r .published_at <<<"$S_REL")
+        S_RTAG="stable-${S_VER}-${S_SHA:0:7}"
+
+        if [ "$FORCE" = "true" ] || ! exists "$S_RTAG"; then
+          ENTRIES=$(jq -c --arg repo "$S_REPO" --arg ref "$S_SHA" --arg ver "$S_VER" --arg tag "$S_RTAG" \
+            '. + [{channel:"stable", repo:$repo, ref:$ref, version:$ver, tag:$tag, prerelease:false}]' <<<"$ENTRIES")
+        else
+          echo "Stable $S_RTAG already released, skipping."
+        fi
+
+        # ---------- BETA (latest upstream pre-release) ----------
+        B_REL=$(gh api "repos/$UP/releases?per_page=30" \
+          --jq '[.[] | select(.prerelease and (.draft | not))][0] // empty')
+
+        if [ -n "$B_REL" ]; then
+          B_TAG=$(jq -r .tag_name <<<"$B_REL")
+          B_DATE=$(jq -r .published_at <<<"$B_REL")
+
+          # Only build beta if it is newer than the stable release
+          if [[ "$B_DATE" > "$S_DATE" ]]; then
+            B_VER="${B_TAG#v}"
+            B_SHA=$(gh api "repos/$UP/commits/$B_TAG" --jq .sha)
+            B_RTAG="beta-${B_VER}-${B_SHA:0:7}"
+            if [ "$FORCE" = "true" ] || ! exists "$B_RTAG"; then
+              ENTRIES=$(jq -c --arg repo "$UP" --arg ref "$B_SHA" --arg ver "$B_VER" --arg tag "$B_RTAG" \
+                '. + [{channel:"beta", repo:$repo, ref:$ref, version:$ver, tag:$tag, prerelease:true}]' <<<"$ENTRIES")
+            else
+              echo "Beta $B_RTAG already released, skipping."
+            fi
+          else
+            echo "Pre-release $B_TAG is older than stable, skipping beta."
+          fi
+        else
+          echo "Upstream has no pre-release."
+        fi
+
+        COUNT=$(jq length <<<"$ENTRIES")
+        echo "count=$COUNT" >> "$GITHUB_OUTPUT"
+        echo "matrix={\"include\":$ENTRIES}" >> "$GITHUB_OUTPUT"
+        echo "Builds planned: $COUNT"; jq . <<<"$ENTRIES"
+
+  # ---------------------------------------------------------------
+  # 2) Build each channel (stable / beta)
+  # ---------------------------------------------------------------
+  build:
+    needs: prepare
+    if: needs.prepare.outputs.count != '0'
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    name: Build ${{ matrix.channel }} (${{ matrix.version }})
     steps:
     - name: Checkout code
       uses: actions/checkout@v6
       with:
-        fetch-depth: 0
+        repository: ${{ matrix.repo }}
+        ref: ${{ matrix.ref }}
 
-    - name: Check for Upstream Updates
-      id: check_update
-      shell: pwsh
-      run: |
-        $upstream = Invoke-RestMethod -Uri "https://api.github.com/repos/${{ env.UPSTREAM_REPO }}/commits/main"
-        $latest_hash = $upstream.sha
-
-        # Lấy version từ latest release tag của upstream
-        $release = Invoke-RestMethod -Uri "https://api.github.com/repos/${{ env.UPSTREAM_REPO }}/releases/latest"
-        $version = $release.tag_name -replace '^v', ''  # bỏ chữ "v" nếu có, vd: v4.4.0 -> 4.4.0
-        echo "UPSTREAM_VERSION=$version" >> $env:GITHUB_ENV
-
-        $last_hash = ""
-        if (Test-Path "last_build_hash.txt") { $last_hash = Get-Content "last_build_hash.txt" }
-
-        if ($latest_hash -eq $last_hash -and "${{ github.event_name }}" -ne "workflow_dispatch") {
-          Write-Host "No changes in upstream. Skipping build."
-          echo "should_build=false" >> $env:GITHUB_OUTPUT
-        } else {
-          Write-Host "Starting build process..."
-          echo "$latest_hash" > last_build_hash.txt
-          echo "should_build=true" >> $env:GITHUB_OUTPUT
-        }
     - name: Prepare Metadata
-      if: steps.check_update.outputs.should_build == 'true'
       shell: pwsh
       run: |
-        # Use current date as the build identifier
         $date = Get-Date -Format "yyyy-MM-dd"
         echo "BUILD_DATE=$date" >> $env:GITHUB_ENV
 
     - name: Set up Python
-      if: steps.check_update.outputs.should_build == 'true'
       uses: actions/setup-python@v6
       with:
         python-version: '3.10'
 
     - name: Install uv
-      if: steps.check_update.outputs.should_build == 'true'
       uses: astral-sh/setup-uv@v7
 
     - name: Install dependencies
-      if: steps.check_update.outputs.should_build == 'true'
       run: uv sync
 
     - name: Download & Extract Latest Tools
-      if: steps.check_update.outputs.should_build == 'true'
       shell: pwsh
       run: |
         # --- Aria2 ---
@@ -88,50 +162,39 @@ jobs:
         Copy-Item -Path $gbeFolder.FullName -Destination "third_party/gbe_fork_tools/" -Recurse -Force
 
     - name: Setup GCC (MSYS2)
-      if: steps.check_update.outputs.should_build == 'true'
       uses: msys2/setup-msys2@v2
       with:
         msystem: MINGW64
         install: mingw-w64-x86_64-gcc
 
     - name: Build C Library
-      if: steps.check_update.outputs.should_build == 'true'
       run: |
         cd c
         gcc midi_player_lib.c -shared -fPIC -o midi_player_lib.dll
         cd ..
 
     - name: Build EXE with PyInstaller
-      if: steps.check_update.outputs.should_build == 'true'
       run: uv run pyinstaller main.spec
 
     - name: Package Release
-      if: steps.check_update.outputs.should_build == 'true'
       shell: pwsh
       run: |
         Remove-Item -Path "dist/*.zip" -Force -ErrorAction SilentlyContinue
-        $zipName = "SMD_Windows_Build_${{ env.UPSTREAM_VERSION }}.zip"
+        $zipName = "SMD_Windows_Build_${{ matrix.version }}.zip"
         Compress-Archive -Path "dist/main/*" -DestinationPath "$zipName"
         echo "ZIP_FILENAME=$zipName" >> $env:GITHUB_ENV
 
     - name: Create GitHub Release
-      if: steps.check_update.outputs.should_build == 'true'
       uses: softprops/action-gh-release@v3
       with:
-        tag_name: "build-${{ env.BUILD_DATE }}-${{ github.run_number }}"
-        name: "Auto-Build: ${{ env.BUILD_DATE }}"
-        body: "Automated build triggered by upstream updates or manual action. Build Number: ${{ github.run_number }}"
+        tag_name: ${{ matrix.tag }}
+        name: "SMD ${{ matrix.version }} (${{ matrix.channel }}) - ${{ env.BUILD_DATE }}"
+        prerelease: ${{ matrix.prerelease }}
+        body: |
+          Automated ${{ matrix.channel }} build.
+          Source: ${{ matrix.repo }} @ ${{ matrix.ref }}
+          Upstream version: ${{ matrix.version }}
+          Run: ${{ github.run_number }}
         files: ${{ env.ZIP_FILENAME }}
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    - name: Save Build Hash
-      if: steps.check_update.outputs.should_build == 'true'
-      shell: pwsh
-      run: |
-        git config user.name "github-actions[bot]"
-        git config user.email "github-actions[bot]@users.noreply.github.com"
-        git add last_build_hash.txt
-        git commit -m "chore: update last build hash [skip ci]"
-        git push
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
